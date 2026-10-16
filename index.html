@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Isekai Idle — Битва Гильдий 2.0 (Online Multiplayer)</title>
+    <script src="/socket.io/socket.io.js"></script>
+    <style>
+        body { background: #090c15; color: #fff; font-family: sans-serif; display: flex; height: 100vh; margin: 0; overflow: hidden; }
+        #sidebar-left, #sidebar-right { width: 320px; background: rgba(18, 23, 38, 0.95); padding: 15px; display: flex; flex-direction: column; gap: 10px; z-index: 10; }
+        #viewport { flex: 1; position: relative; }
+        canvas { display: block; width: 100%; height: 100%; }
+        .btn { background: #d4af37; border: none; padding: 10px; cursor: pointer; font-weight: bold; border-radius: 4px; }
+        .btn:disabled { background: #475569; cursor: not-allowed; }
+        .girl-card { background: rgba(255,255,255,0.05); padding: 8px; margin-bottom: 5px; border-radius: 4px; display: flex; justify-content: space-between; font-size: 12px; }
+    </style>
+</head>
+<body>
+
+    <div id="sidebar-left">
+        <h3>🏆 Сетевой Статус</h3>
+        <div>Ваша Гильдия: <strong id="my-guild">...</strong></div>
+        <div>Раунд: <strong id="round-num">1</strong></div>
+        <hr style="border-color: #334155;">
+        <h3>📊 Очки Гильдий</h3>
+        <div id="scores-list"></div>
+    </div>
+
+    <div id="viewport">
+        <canvas id="mapCanvas"></canvas>
+    </div>
+
+    <div id="sidebar-right">
+        <h3>📍 Точка Интереса</h3>
+        <div id="poi-info">Выберите точку на карте</div>
+        <button class="btn" id="btn-end-turn" onclick="endTurn()">Завершить Ход</button>
+        <hr style="border-color: #334155;">
+        <h3>🎴 Ваша Колода</h3>
+        <div id="deck-list"></div>
+    </div>
+
+    <script>
+        const socket = io();
+        const canvas = document.getElementById('mapCanvas');
+        const ctx = canvas.getContext('2d');
+
+        let myGuildId = null;
+        let gameState = null;
+        let selectedPoi = null;
+
+        const girlNames = ["Офелия", "Равен", "Люмьера", "Суккуб", "Сильфия", "Ария", "Фрея", "Элиза", "Моргана", "Изольда"];
+        const myDeck = girlNames.map((name, i) => ({ id: i + 1, name, power: (i + 1) * 3000, deployed: false }));
+
+        socket.on('init', (data) => {
+            myGuildId = data.guildId;
+            document.getElementById('my-guild').innerText = myGuildId.toUpperCase();
+            document.getElementById('my-guild').style.color = getGuildColor(myGuildId);
+            gameState = data.gameState;
+            render();
+        });
+
+        socket.on('stateUpdate', (newState) => {
+            gameState = newState;
+            document.getElementById('round-num').innerText = gameState.round;
+            render();
+        });
+
+        function getGuildColor(id) {
+            const colors = { red: '#ef4444', blue: '#3b82f6', green: '#22c55e', yellow: '#eab308' };
+            return colors[id] || '#94a3b8';
+        }
+
+        function endTurn() {
+            socket.emit('endTurn');
+        }
+
+        function deployGirl(girlId) {
+            if (!selectedPoi) return;
+            const girl = myDeck.find(g => g.id === girlId);
+            if (girl && !girl.deployed) {
+                girl.deployed = true;
+                socket.emit('deployGirl', { poiId: selectedPoi.id, girl });
+                renderDeck();
+            }
+        }
+
+        function renderDeck() {
+            const list = document.getElementById('deck-list');
+            list.innerHTML = '';
+            myDeck.forEach(g => {
+                list.innerHTML += `
+                    <div class="girl-card">
+                        <div><strong>${g.name}</strong> (${g.power} Мощи)</div>
+                        <button class="btn" style="padding:2px 6px;" ${g.deployed || !selectedPoi ? 'disabled' : ''} onclick="deployGirl(${g.id})">Отправить</button>
+                    </div>
+                `;
+            });
+        }
+
+        function render() {
+            if (!gameState) return;
+            canvas.width = canvas.clientWidth;
+            canvas.height = canvas.clientHeight;
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Отрисовка POI
+            gameState.pois.forEach(p => {
+                const x = canvas.width / 2 + p.q * 35;
+                const y = canvas.height / 2 + p.r * 35;
+
+                ctx.beginPath();
+                ctx.arc(x, y, 20, 0, Math.PI * 2);
+                ctx.fillStyle = p.owner ? getGuildColor(p.owner) : '#334155';
+                ctx.fill();
+                ctx.strokeStyle = '#fff';
+                ctx.stroke();
+
+                ctx.fillStyle = '#fff';
+                ctx.font = '10px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.fillText(p.name, x, y + 30);
+            });
+
+            // Обновление счета
+            const scoresBox = document.getElementById('scores-list');
+            scoresBox.innerHTML = '';
+            Object.keys(gameState.scores).forEach(g => {
+                scoresBox.innerHTML += `<div><span style="color:${getGuildColor(g)}">${g.toUpperCase()}:</span> ${gameState.scores[g]} WP</div>`;
+            });
+
+            renderDeck();
+        }
+
+        canvas.addEventListener('click', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const mouseX = e.clientX - rect.left;
+            const mouseY = e.clientY - rect.top;
+
+            if (!gameState) return;
+            gameState.pois.forEach(p => {
+                const x = canvas.width / 2 + p.q * 35;
+                const y = canvas.height / 2 + p.r * 35;
+                if (Math.hypot(mouseX - x, mouseY - y) < 20) {
+                    selectedPoi = p;
+                    document.getElementById('poi-info').innerHTML = `<strong>${p.name}</strong><br>Владелец: ${p.owner || 'Никого'}`;
+                    renderDeck();
+                }
+            });
+        });
+    </script>
+</body>
+</html>
